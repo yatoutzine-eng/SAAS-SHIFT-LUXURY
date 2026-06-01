@@ -1,0 +1,12 @@
+# Dépendances
+node_modules/
+dist/
+
+# Variables d'environnement — NE JAMAIS COMMIT
+.env
+.env.local
+.env.production
+
+# Divers
+.DS_Store
+*.log
