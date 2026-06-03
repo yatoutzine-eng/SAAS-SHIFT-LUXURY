@@ -39,6 +39,34 @@ const generatePDF = (reservations, filter, agencyName) => {
   setTimeout(() => URL.revokeObjectURL(url), 10000);
 };
 
+// ── Email de confirmation au client ──
+const sendConfirmationEmail = async (res, agencyName) => {
+  try {
+    const startDate = res.start_date ? new Date(res.start_date).toLocaleDateString('fr-FR') : '—';
+    const endDate = res.end_date ? new Date(res.end_date).toLocaleDateString('fr-FR') : '—';
+    await fetch('https://nhdancdcsarrgfmfebop.supabase.co/functions/v1/send-contract-email', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        clientEmail: res.client_email,
+        clientName: res.client_name,
+        merchantName: agencyName || 'Shift Luxury',
+        vehicleModel: res.fleet?.model || res.vehicle_model || 'Véhicule',
+        startDate,
+        endDate,
+        duration: res.start_date && res.end_date
+          ? Math.ceil((new Date(res.end_date) - new Date(res.start_date)) / (1000 * 60 * 60 * 24))
+          : 0,
+        totalPrice: res.total_price || 0,
+        reservationId: res.id,
+        isConfirmation: true,
+      }),
+    });
+  } catch (err) {
+    console.error('Email confirmation error:', err);
+  }
+};
+
 export default function ReservationsView() {
   const [filter, setFilter] = useState('all');
   const [reservations, setReservations] = useState([]);
@@ -88,6 +116,12 @@ export default function ReservationsView() {
     } catch (err) { alert('Erreur : ' + err.message); }
   };
 
+  // ── Confirmer + envoyer email au client ──
+  const handleConfirm = async (res) => {
+    await updateStatus(res.id, 'confirmed');
+    if (res.client_email) await sendConfirmationEmail(res, agencyName);
+  };
+
   const handleReleaseDeposit = async (res) => {
     if (!window.confirm(`Libérer la caution de ${res.deposit_amount?.toLocaleString('fr-FR') || 1500} € pour ${res.client_name} ?`)) return;
     setReleasingId(res.id);
@@ -98,7 +132,6 @@ export default function ReservationsView() {
     finally { setReleasingId(null); }
   };
 
-  // ── Signature contrat + sauvegarde URL PDF ──
   const handleSignContract = async (sig, contractUrl) => {
     await updateStatus(contractRes.id, 'signed', {
       contract_signature: sig,
@@ -160,8 +193,14 @@ export default function ReservationsView() {
         )}
         {res.status === 'pending' && (
           <div className="flex gap-2">
-            <button onClick={() => updateStatus(res.id, 'confirmed')} className="px-4 py-2 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-xl text-[9px] font-black uppercase hover:bg-emerald-500/20 transition-all">✓ Confirmer</button>
-            <button onClick={() => updateStatus(res.id, 'cancelled')} className="px-4 py-2 bg-red-500/10 text-red-400 border border-red-500/20 rounded-xl text-[9px] font-black uppercase hover:bg-red-500/20 transition-all">✕ Refuser</button>
+            <button onClick={() => handleConfirm(res)}
+              className="px-4 py-2 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-xl text-[9px] font-black uppercase hover:bg-emerald-500/20 transition-all">
+              ✓ Confirmer
+            </button>
+            <button onClick={() => updateStatus(res.id, 'cancelled')}
+              className="px-4 py-2 bg-red-500/10 text-red-400 border border-red-500/20 rounded-xl text-[9px] font-black uppercase hover:bg-red-500/20 transition-all">
+              ✕ Refuser
+            </button>
           </div>
         )}
         {res.status === 'confirmed' && (
