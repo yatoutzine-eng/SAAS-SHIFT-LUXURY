@@ -14,6 +14,7 @@ export default function Storefront({ onLogout }) {
   const [search, setSearch] = useState('');
   const [selectedVehicle, setSelectedVehicle] = useState(null);
   const [storeSettings, setStoreSettings] = useState(null);
+  const [agencyProfile, setAgencyProfile] = useState(null);
 
   useEffect(() => {
     const saved = localStorage.getItem('shift_selected_store');
@@ -21,20 +22,27 @@ export default function Storefront({ onLogout }) {
       const store = JSON.parse(saved);
       setStoreSettings(store);
       loadFleet(store.user_id);
+      loadAgencyProfile(store.user_id);
     } else {
       loadAllFleet();
     }
   }, []);
 
+  const loadAgencyProfile = async (merchantId) => {
+    try {
+      const { data } = await supabase
+        .from('agency_profiles')
+        .select('logo_url, tagline, agency_name')
+        .eq('user_id', merchantId)
+        .maybeSingle();
+      if (data) setAgencyProfile(data);
+    } catch (err) { console.error(err); }
+  };
+
   const loadFleet = async (merchantId) => {
     try {
       setIsLoading(true);
-      const { data } = await supabase
-        .from('fleet')
-        .select('*')
-        .eq('user_id', merchantId)
-        .eq('status', 'available')
-        .order('created_at', { ascending: false });
+      const { data } = await supabase.from('fleet').select('*').eq('user_id', merchantId).eq('status', 'available').order('created_at', { ascending: false });
       setVehicles(data || []);
     } catch (err) { console.error(err); }
     finally { setIsLoading(false); }
@@ -60,30 +68,47 @@ export default function Storefront({ onLogout }) {
     v.fuel?.toLowerCase().includes(search.toLowerCase())
   );
 
+  const shopName = agencyProfile?.agency_name || storeSettings?.shop_name || 'Shift Luxury';
+
   return (
     <div className="min-h-screen bg-black text-white pb-32">
+
       {/* Nav */}
       <nav className="h-20 border-b border-white/5 bg-black/80 backdrop-blur-xl sticky top-0 z-50 px-6 lg:px-12 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <button onClick={handleLeaveStore} className="p-2 text-zinc-500 hover:text-white transition-colors mr-1">
             <ArrowLeft size={18} />
           </button>
-          <div className="w-9 h-9 border-2 border-[#D4AF37] rounded-xl flex items-center justify-center">
-            <Car size={16} style={{ color: GOLD }} />
-          </div>
+
+          {/* Logo ou icône */}
+          {agencyProfile?.logo_url ? (
+            <div className="w-10 h-10 rounded-xl overflow-hidden bg-zinc-900 border border-white/10 flex-shrink-0">
+              <img src={agencyProfile.logo_url} alt="logo" className="w-full h-full object-contain p-1" />
+            </div>
+          ) : (
+            <div className="w-10 h-10 border-2 border-[#D4AF37] rounded-xl flex items-center justify-center flex-shrink-0">
+              <Car size={16} style={{ color: GOLD }} />
+            </div>
+          )}
+
+          {/* Nom agence */}
           <div>
-            <h1 className="text-sm font-black tracking-widest uppercase">
-              {storeSettings?.shop_name || 'Shift'} <span style={{ color: GOLD }}>Luxury</span>
+            <h1 className="text-sm font-black tracking-widest uppercase leading-tight">
+              {shopName.split(' ').length > 1
+                ? <>{shopName.split(' ')[0]} <span style={{ color: GOLD }}>{shopName.split(' ').slice(1).join(' ')}</span></>
+                : <span style={{ color: GOLD }}>{shopName}</span>
+              }
             </h1>
             {storeSettings?.store_code && (
               <p className="text-[8px] font-bold text-zinc-500 uppercase tracking-widest">{storeSettings.store_code}</p>
             )}
           </div>
         </div>
+
         <div className="flex items-center gap-3">
           <span className="hidden md:block text-[10px] font-bold text-zinc-500 uppercase truncate max-w-[150px]">{user?.email}</span>
           <button onClick={() => { localStorage.removeItem('shift_viewing_store'); window.location.reload(); }}
-            className="p-2.5 bg-zinc-900 border border-zinc-800 rounded-xl text-zinc-500 hover:text-[#D4AF37] transition-all" title="Mon compte">
+            className="p-2.5 bg-zinc-900 border border-zinc-800 rounded-xl text-zinc-500 hover:text-[#D4AF37] transition-all">
             <User size={16} />
           </button>
           <button onClick={onLogout} className="p-2.5 bg-zinc-900 border border-zinc-800 rounded-xl text-zinc-500 hover:text-red-500 transition-all">
@@ -93,14 +118,16 @@ export default function Storefront({ onLogout }) {
       </nav>
 
       <main className="p-6 lg:p-12 max-w-7xl mx-auto">
-        {/* Header */}
         <header className="mb-10">
           <h2 className="text-4xl md:text-5xl font-black uppercase tracking-tighter mb-2">
-            {storeSettings?.shop_name ? storeSettings.shop_name.split(' ')[0] : 'Elite'}{' '}
-            <span style={{ color: GOLD }}>
-              {storeSettings?.shop_name ? storeSettings.shop_name.split(' ').slice(1).join(' ') : 'Showroom'}
-            </span>
+            {shopName.split(' ').length > 1
+              ? <>{shopName.split(' ')[0]} <span style={{ color: GOLD }}>{shopName.split(' ').slice(1).join(' ')}</span></>
+              : <span style={{ color: GOLD }}>{shopName}</span>
+            }
           </h2>
+          {agencyProfile?.tagline && (
+            <p className="text-zinc-400 text-xs font-bold italic mb-3">"{agencyProfile.tagline}"</p>
+          )}
           <p className="text-zinc-500 font-bold uppercase tracking-[0.3em] text-xs mb-6">
             {filtered.length} véhicule{filtered.length > 1 ? 's' : ''} disponible{filtered.length > 1 ? 's' : ''}
           </p>
@@ -123,7 +150,6 @@ export default function Storefront({ onLogout }) {
             <p className="text-zinc-500 font-bold uppercase tracking-widest text-sm mb-2">
               {search ? 'Aucun véhicule ne correspond' : 'Aucun véhicule disponible'}
             </p>
-            {!search && <p className="text-zinc-600 text-xs">Cette agence n'a pas encore ajouté de véhicules</p>}
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-8">
@@ -131,16 +157,13 @@ export default function Storefront({ onLogout }) {
               <motion.div key={v.id} initial={{ opacity: 0, y: 20 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }}
                 whileHover={{ y: -6 }}
                 className="group bg-zinc-900/30 border border-zinc-800 rounded-[2.5rem] overflow-hidden hover:border-[#D4AF37]/40 transition-all duration-500 cursor-pointer"
-                onClick={() => setSelectedVehicle(v)}
-              >
+                onClick={() => setSelectedVehicle(v)}>
                 <div className="aspect-[16/10] overflow-hidden relative bg-zinc-900">
                   {v.image
                     ? <img src={v.image} alt={v.model} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" />
                     : <div className="w-full h-full flex items-center justify-center"><Car size={48} className="text-zinc-700" /></div>}
                   <div className="absolute top-4 right-4 px-3 py-1.5 bg-black/70 backdrop-blur rounded-xl border border-white/10">
-                    <span className="text-[10px] font-black uppercase tracking-widest" style={{ color: GOLD }}>
-                      {v.price?.toLocaleString('fr-FR')}€/j
-                    </span>
+                    <span className="text-[10px] font-black uppercase tracking-widest" style={{ color: GOLD }}>{v.price?.toLocaleString('fr-FR')}€/j</span>
                   </div>
                   {v.weekend_price && v.weekend_price !== v.price && (
                     <div className="absolute bottom-4 left-4 px-3 py-1 bg-[#D4AF37]/90 rounded-xl">
@@ -172,7 +195,6 @@ export default function Storefront({ onLogout }) {
         )}
       </main>
 
-      {/* Conciergerie WhatsApp */}
       {storeSettings?.concierge_phone && (
         <div className="fixed bottom-28 left-1/2 -translate-x-1/2 z-40 w-[90%] max-w-sm">
           <a href={`https://wa.me/${storeSettings.concierge_phone.replace(/\s/g, '')}`} target="_blank" rel="noreferrer"
@@ -188,7 +210,6 @@ export default function Storefront({ onLogout }) {
         </div>
       )}
 
-      {/* Nav mobile */}
       <nav className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-zinc-900/90 backdrop-blur border border-white/10 px-8 py-4 rounded-[2.5rem] flex items-center gap-10 shadow-2xl z-50">
         <button className="flex flex-col items-center gap-1 text-[#D4AF37]">
           <Car size={20} /><span className="text-[8px] font-black uppercase">Showroom</span>
@@ -202,17 +223,12 @@ export default function Storefront({ onLogout }) {
         </button>
       </nav>
 
-      {/* Modal réservation */}
       <AnimatePresence>
         {selectedVehicle && (
-          <BookingModal
-            vehicle={selectedVehicle}
-            storeSettings={storeSettings}
-            merchantId={storeSettings?.user_id}
-            onClose={() => setSelectedVehicle(null)}
-          />
+          <BookingModal vehicle={selectedVehicle} storeSettings={storeSettings} merchantId={storeSettings?.user_id} onClose={() => setSelectedVehicle(null)} />
         )}
       </AnimatePresence>
     </div>
   );
 }
+

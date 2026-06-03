@@ -18,10 +18,10 @@ export default function ContractModal({ reservation, onClose, onSign }) {
   const endDate = reservation.endDate ? new Date(reservation.endDate).toLocaleDateString('fr-FR') : '___________';
   const duration = reservation.startDate && reservation.endDate
     ? Math.ceil((new Date(reservation.endDate) - new Date(reservation.startDate)) / (1000 * 60 * 60 * 24))
-    : '___';
+    : 0;
   const totalPrice = reservation.totalPrice || reservation.total_price || '___';
 
-  const generateAndUploadPDF = async (signatureData) => {
+  const generateAndUploadContract = async (signatureData) => {
     const contractHTML = `<!DOCTYPE html>
 <html lang="fr"><head><meta charset="UTF-8"/>
 <title>Contrat — ${reservation.id?.slice(0,8).toUpperCase()}</title>
@@ -110,9 +110,9 @@ body { font-family:Georgia,serif;color:#111;background:white;padding:40px;font-s
 </body></html>`;
 
     try {
-      const blob = new Blob([contractHTML], { type: 'text/html;charset=utf-8' });
+      const blob = new Blob([contractHTML], { type: 'application/octet-stream' });
       const fileName = `contracts/contract_${reservation.id}_${Date.now()}.html`;
-      const { error } = await supabase.storage.from('documents').upload(fileName, blob, { contentType: "application/octet-stream", upsert: true });
+      const { error } = await supabase.storage.from('documents').upload(fileName, blob, { contentType: 'application/octet-stream', upsert: true });
       if (error) { console.error('Upload error:', error); return null; }
       const { data: urlData } = supabase.storage.from('documents').getPublicUrl(fileName);
       return urlData?.publicUrl || null;
@@ -122,10 +122,10 @@ body { font-family:Georgia,serif;color:#111;background:white;padding:40px;font-s
     }
   };
 
-  const sendEmails = async (contractUrl) => {
+  const sendEmails = async (signatureData) => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
-      const { data: storeData } = await supabase.from('store_settings').select('shop_name, concierge_phone').eq('user_id', user?.id).maybeSingle();
+      const { data: storeData } = await supabase.from('store_settings').select('shop_name').eq('user_id', user?.id).maybeSingle();
 
       await fetch('https://nhdancdcsarrgfmfebop.supabase.co/functions/v1/send-contract-email', {
         method: 'POST',
@@ -133,12 +133,17 @@ body { font-family:Georgia,serif;color:#111;background:white;padding:40px;font-s
         body: JSON.stringify({
           clientEmail: reservation.client?.email,
           clientName: reservation.client?.name,
+          clientPhone: reservation.client?.phone,
+          clientLicense: reservation.client?.license,
           merchantEmail: user?.email,
-          contractUrl,
+          merchantName: storeData?.shop_name,
           vehicleModel: reservation.vehicle || reservation.vehicle_model || 'Véhicule',
           startDate,
           endDate,
+          duration,
           totalPrice,
+          signatureData,
+          reservationId: reservation.id,
         }),
       });
       setEmailSent(true);
@@ -154,8 +159,8 @@ body { font-family:Georgia,serif;color:#111;background:white;padding:40px;font-s
       if (sigPad.current && !sigPad.current.isEmpty()) {
         signatureData = sigPad.current.getCanvas().toDataURL('image/png');
       }
-      const contractUrl = await generateAndUploadPDF(signatureData);
-      if (contractUrl) await sendEmails(contractUrl);
+      const contractUrl = await generateAndUploadContract(signatureData);
+      await sendEmails(signatureData);
       onSign(signatureData || 'signed', contractUrl);
     } catch (err) {
       console.error('handleSign error:', err);
@@ -274,12 +279,13 @@ body { font-family:Georgia,serif;color:#111;background:white;padding:40px;font-s
         </div>
 
         <div className="p-6 bg-zinc-50 border-t border-zinc-100 flex items-center justify-between">
-          {emailSent && (
-            <div className="flex items-center gap-2 text-emerald-500 text-[10px] font-black uppercase">
-              <Mail size={14} /> Email envoyé au client !
-            </div>
-          )}
-          {!emailSent && <div />}
+          <div>
+            {emailSent && (
+              <div className="flex items-center gap-2 text-emerald-500 text-[10px] font-black uppercase">
+                <Mail size={14} /> Emails envoyés !
+              </div>
+            )}
+          </div>
           <div className="flex gap-4">
             <button onClick={onClose} className="px-8 py-4 text-zinc-500 font-black uppercase tracking-widest text-[10px]">Annuler</button>
             <button onClick={handleSign} disabled={isGenerating}
