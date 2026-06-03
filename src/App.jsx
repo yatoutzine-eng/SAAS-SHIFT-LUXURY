@@ -7,6 +7,7 @@ import ClientAccount from './pages/ClientAccount';
 import PublicAgencyPage from './pages/PublicAgencyPage';
 import { useTheme } from './hooks/useTheme';
 import { useAuthStore } from './store/useAuthStore';
+import { supabase } from './lib/supabase';
 
 const LoadingFallback = () => (
   <div className="min-h-screen bg-black flex items-center justify-center">
@@ -23,7 +24,6 @@ const getAgencyCodeFromURL = () => {
   return match ? match[1].toUpperCase() : null;
 };
 
-// ── Page de succès après paiement Stripe ──────────────────────────────────
 const DepositSuccessPage = ({ bookingId, onContinue }) => (
   <div className="min-h-screen bg-black text-white flex items-center justify-center p-6">
     <div className="text-center max-w-md">
@@ -62,7 +62,6 @@ export default function App() {
   });
   const [publicAgencyCode, setPublicAgencyCode] = useState(() => getAgencyCodeFromURL());
 
-  // Détecter le retour depuis Stripe
   const urlParams = new URLSearchParams(window.location.search);
   const depositSuccess = urlParams.get('deposit_success');
   const depositCancelled = urlParams.get('deposit_cancelled');
@@ -80,23 +79,23 @@ export default function App() {
     }
   }, []);
 
+  // Nettoyage — on ne redirige plus automatiquement vers le store à la connexion
   useEffect(() => {
-    if (user && localStorage.getItem('shift_viewing_store') && selectedStore) {
-      setClientView('store');
+    if (user && role !== 'merchant') {
+      localStorage.removeItem('shift_viewing_store');
+      localStorage.removeItem('shift_selected_store');
     }
   }, [user]);
 
-  // Mettre à jour le statut de la caution après succès Stripe
+  // ── Marquer la caution comme payée après retour Stripe ─────────────────
   useEffect(() => {
     if (depositSuccess && depositBookingId) {
-      const { createClient } = require('@supabase/supabase-js');
-      import('./lib/supabase').then(({ supabase }) => {
-        supabase.from('bookings').update({
-          deposit_status: 'paid',
-          updated_at: new Date(),
-        }).eq('id', depositBookingId).then(() => {
-          console.log('Caution marquée comme payée');
-        });
+      supabase.from('bookings').update({
+        deposit_status: 'paid',
+        updated_at: new Date(),
+      }).eq('id', depositBookingId).then(({ error }) => {
+        if (error) console.error('Erreur mise à jour caution:', error);
+        else console.log('Caution marquée comme payée ✅');
       });
     }
   }, [depositSuccess, depositBookingId]);
@@ -105,11 +104,15 @@ export default function App() {
 
   // ── Page succès caution ──
   if (depositSuccess) {
-    const handleContinueAfterDeposit = () => {
-      window.history.pushState({}, '', '/');
-      window.location.reload();
-    };
-    return <DepositSuccessPage bookingId={depositBookingId} onContinue={handleContinueAfterDeposit} />;
+    return (
+      <DepositSuccessPage
+        bookingId={depositBookingId}
+        onContinue={() => {
+          window.history.pushState({}, '', '/');
+          window.location.reload();
+        }}
+      />
+    );
   }
 
   // ── Page annulation caution ──

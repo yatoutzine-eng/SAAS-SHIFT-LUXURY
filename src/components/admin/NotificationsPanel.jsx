@@ -1,16 +1,16 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Bell, X, Car, CheckCircle, Clock, AlertCircle, User } from 'lucide-react';
+import { Bell, X, Car, CheckCircle, Clock, AlertCircle } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 
 const GOLD = "#D4AF37";
 
 const NOTIF_ICONS = {
-  'new_booking':  { icon: Car,          color: GOLD,       bg: 'bg-[#D4AF37]/10' },
-  'booking_paid': { icon: CheckCircle,  color: '#34d399',  bg: 'bg-emerald-500/10' },
-  'return_today': { icon: Clock,        color: '#60a5fa',  bg: 'bg-blue-500/10' },
-  'pending':      { icon: AlertCircle,  color: '#f87171',  bg: 'bg-red-500/10' },
-  'default':      { icon: Bell,         color: GOLD,       bg: 'bg-[#D4AF37]/10' },
+  'new_booking':  { icon: Car,         color: GOLD,      bg: 'bg-[#D4AF37]/10' },
+  'booking_paid': { icon: CheckCircle, color: '#34d399', bg: 'bg-emerald-500/10' },
+  'return_today': { icon: Clock,       color: '#60a5fa', bg: 'bg-blue-500/10' },
+  'pending':      { icon: AlertCircle, color: '#f87171', bg: 'bg-red-500/10' },
+  'default':      { icon: Bell,        color: GOLD,      bg: 'bg-[#D4AF37]/10' },
 };
 
 export default function NotificationsPanel({ onNavigate }) {
@@ -18,80 +18,74 @@ export default function NotificationsPanel({ onNavigate }) {
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const panelRef = useRef(null);
+  const channelRef = useRef(null);
 
   useEffect(() => {
-    loadNotifications();
-    setupRealtime();
+    loadNotificationsFromBookings();
 
-    const handleClick = (e) => { if (panelRef.current && !panelRef.current.contains(e.target)) setIsOpen(false); };
+    const handleClick = (e) => {
+      if (panelRef.current && !panelRef.current.contains(e.target)) setIsOpen(false);
+    };
     document.addEventListener('mousedown', handleClick);
-    return () => document.removeEventListener('mousedown', handleClick);
+    return () => {
+      document.removeEventListener('mousedown', handleClick);
+      // Cleanup realtime channel
+      if (channelRef.current) {
+        supabase.removeChannel(channelRef.current);
+        channelRef.current = null;
+      }
+    };
   }, []);
-
-  const loadNotifications = async () => {
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-
-      const { data } = await supabase
-        .from('notifications')
-        .select('*')
-        .eq('merchant_id', user.id)
-        .order('created_at', { ascending: false })
-        .limit(20);
-
-      setNotifications(data || []);
-      setUnreadCount((data || []).filter(n => !n.read).length);
-    } catch (err) {
-      // Table pas encore créée — on génère des notifs depuis les bookings
-      await loadNotificationsFromBookings();
-    }
-  };
 
   const loadNotificationsFromBookings = async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
-      const { data: bookings } = await supabase
+      const { data: bookings, error } = await supabase
         .from('bookings')
-        .select('*, fleet(model)')
+        .select('id, status, client_name, created_at, end_date, vehicle_model')
         .eq('merchant_id', user.id)
         .order('created_at', { ascending: false })
-        .limit(10);
+        .limit(15);
 
-      if (!bookings) return;
+      if (error || !bookings) return;
 
       const today = new Date().toISOString().split('T')[0];
       const notifs = bookings.map(b => ({
         id: b.id,
         type: b.status === 'pending' ? 'pending' : b.end_date === today ? 'return_today' : 'new_booking',
         title: b.status === 'pending' ? 'Nouvelle réservation' : b.end_date === today ? 'Retour prévu aujourd\'hui' : 'Réservation confirmée',
-        message: `${b.client_name || 'Client'} — ${b.fleet?.model || 'Véhicule'}`,
+        message: `${b.client_name || 'Client'} — ${b.vehicle_model || 'Véhicule'}`,
         created_at: b.created_at,
-        read: !['pending'].includes(b.status),
-        booking_id: b.id,
+        read: b.status !== 'pending',
         view: b.status === 'pending' ? 'bookings' : 'planning',
       }));
 
       setNotifications(notifs);
       setUnreadCount(notifs.filter(n => !n.read).length);
-    } catch (err) { console.error(err); }
+
+      // Setup realtime seulement après avoir chargé les données
+      setupRealtime(user.id);
+    } catch (err) {
+      console.error('Notifications error:', err);
+    }
   };
 
-  const setupRealtime = async () => {
+  const setupRealtime = (userId) => {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
+      // Éviter les doublons de channels
+      if (channelRef.current) {
+        supabase.removeChannel(channelRef.current);
+      }
 
-      // Écoute les nouvelles réservations en temps réel
-      supabase
-        .channel('new_bookings')
+      const channel = supabase
+        .channel(`bookings_notif_${userId}`)
         .on('postgres_changes', {
           event: 'INSERT',
           schema: 'public',
           table: 'bookings',
-          filter: `merchant_id=eq.${user.id}`
+          filter: `merchant_id=eq.${userId}`
         }, (payload) => {
           const newNotif = {
             id: payload.new.id,
@@ -102,11 +96,19 @@ export default function NotificationsPanel({ onNavigate }) {
             read: false,
             view: 'bookings',
           };
-          setNotifications(prev => [newNotif, ...prev]);
+          setNotifications(prev => [newNotif, ...prev.slice(0, 14)]);
           setUnreadCount(prev => prev + 1);
         })
-        .subscribe();
-    } catch (err) { console.error(err); }
+        .subscribe((status) => {
+          if (status === 'CHANNEL_ERROR') {
+            console.log('Realtime not available');
+          }
+        });
+
+      channelRef.current = channel;
+    } catch (err) {
+      // Realtime non disponible, on continue sans
+    }
   };
 
   const markAllRead = () => {
@@ -134,32 +136,21 @@ export default function NotificationsPanel({ onNavigate }) {
 
   return (
     <div className="relative" ref={panelRef}>
-      {/* Bouton cloche */}
-      <button
-        onClick={() => setIsOpen(!isOpen)}
-        className="relative p-3 bg-white/5 border border-white/10 rounded-xl hover:bg-white/10 hover:border-[#D4AF37]/30 transition-all"
-      >
+      <button onClick={() => setIsOpen(!isOpen)}
+        className="relative p-3 bg-white/5 border border-white/10 rounded-xl hover:bg-white/10 hover:border-[#D4AF37]/30 transition-all">
         <Bell size={18} className={unreadCount > 0 ? 'text-[#D4AF37]' : 'text-zinc-500'} />
         {unreadCount > 0 && (
-          <motion.span
-            initial={{ scale: 0 }} animate={{ scale: 1 }}
-            className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-red-500 text-white text-[9px] font-black rounded-full flex items-center justify-center"
-          >
+          <motion.span initial={{ scale: 0 }} animate={{ scale: 1 }}
+            className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-red-500 text-white text-[9px] font-black rounded-full flex items-center justify-center">
             {unreadCount > 9 ? '9+' : unreadCount}
           </motion.span>
         )}
       </button>
 
-      {/* Panel */}
       <AnimatePresence>
         {isOpen && (
-          <motion.div
-            initial={{ opacity: 0, y: -10, scale: 0.95 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -10, scale: 0.95 }}
-            className="absolute right-0 top-14 w-96 bg-zinc-900 border border-white/10 rounded-[2rem] shadow-2xl overflow-hidden z-50"
-          >
-            {/* Header panel */}
+          <motion.div initial={{ opacity: 0, y: -10, scale: 0.95 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: -10, scale: 0.95 }}
+            className="absolute right-0 top-14 w-96 bg-zinc-900 border border-white/10 rounded-[2rem] shadow-2xl overflow-hidden z-50">
             <div className="flex items-center justify-between p-5 border-b border-white/5">
               <div className="flex items-center gap-3">
                 <Bell size={16} style={{ color: GOLD }} />
@@ -174,13 +165,10 @@ export default function NotificationsPanel({ onNavigate }) {
                     Tout lire
                   </button>
                 )}
-                <button onClick={() => setIsOpen(false)} className="p-1 hover:text-[#D4AF37] transition-colors">
-                  <X size={16} />
-                </button>
+                <button onClick={() => setIsOpen(false)} className="p-1 hover:text-[#D4AF37] transition-colors"><X size={16} /></button>
               </div>
             </div>
 
-            {/* Liste notifs */}
             <div className="max-h-96 overflow-y-auto">
               {notifications.length === 0 ? (
                 <div className="p-8 text-center">
@@ -192,14 +180,12 @@ export default function NotificationsPanel({ onNavigate }) {
                   const { icon: Icon, color, bg } = NOTIF_ICONS[notif.type] || NOTIF_ICONS.default;
                   return (
                     <button key={notif.id} onClick={() => handleNotifClick(notif)}
-                      className={`w-full flex items-start gap-4 p-5 border-b border-white/5 hover:bg-white/5 transition-all text-left ${!notif.read ? 'bg-[#D4AF37]/3' : ''}`}>
+                      className={`w-full flex items-start gap-4 p-5 border-b border-white/5 hover:bg-white/5 transition-all text-left ${!notif.read ? 'bg-[#D4AF37]/5' : ''}`}>
                       <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${bg}`}>
                         <Icon size={16} style={{ color }} />
                       </div>
                       <div className="flex-1 min-w-0">
-                        <p className={`text-xs font-black uppercase leading-tight ${!notif.read ? 'text-white' : 'text-zinc-400'}`}>
-                          {notif.title}
-                        </p>
+                        <p className={`text-xs font-black uppercase leading-tight ${!notif.read ? 'text-white' : 'text-zinc-400'}`}>{notif.title}</p>
                         <p className="text-[10px] text-zinc-500 font-bold mt-1 truncate">{notif.message}</p>
                         <p className="text-[9px] text-zinc-600 font-bold uppercase mt-1">{formatTime(notif.created_at)}</p>
                       </div>
@@ -215,3 +201,4 @@ export default function NotificationsPanel({ onNavigate }) {
     </div>
   );
 }
+

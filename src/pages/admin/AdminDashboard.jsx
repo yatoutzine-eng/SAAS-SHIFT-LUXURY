@@ -2,7 +2,7 @@ import React, { useState, Suspense, useEffect } from 'react';
 import { 
   LayoutDashboard, CalendarCheck, Settings,
   LogOut, Car, Menu, X, Calendar as CalendarIcon,
-  Clock, ShieldCheck, ArrowUpRight, DollarSign, Activity, Globe, Bell, BarChart2, Building2
+  Clock, ShieldCheck, ArrowUpRight, DollarSign, Activity, Globe, Bell, BarChart2, Building2, Star
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import PerformanceChart from './PerformanceChart';
@@ -12,6 +12,7 @@ import PlanningView from './PlanningView';
 import FleetView from './FleetView';
 import StatsView from './StatsView';
 import AgencyProfileView from './AgencyProfileView';
+import ReviewsView from './ReviewsView';
 import HomeMapModal from '../HomeMapModal';
 import NotificationsPanel from '../../components/admin/NotificationsPanel';
 import { supabase } from '../../lib/supabase';
@@ -44,7 +45,7 @@ export default function AdminDashboard({ onLogout }) {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isMapOpen, setIsMapOpen] = useState(false);
   const [isLoadingStats, setIsLoadingStats] = useState(true);
-  const [stats, setStats] = useState({ revenue: 0, occupancy: 0, weekDepartures: 0, fleetCount: 0, pendingCount: 0 });
+  const [stats, setStats] = useState({ revenue: 0, occupancy: 0, weekDepartures: 0, fleetCount: 0, pendingCount: 0, reviewCount: 0 });
   const [chartData, setChartData] = useState([]);
   const [urgentActions, setUrgentActions] = useState([]);
 
@@ -63,11 +64,7 @@ export default function AdminDashboard({ onLogout }) {
       const occupancy = fleetCount > 0 ? Math.round((rentedCount / fleetCount) * 100) : 0;
 
       const { data: bookings } = await supabase
-        .from('bookings')
-        .select('*, fleet(model)')
-        .eq('merchant_id', user.id)
-        .order('created_at', { ascending: false });
-
+        .from('bookings').select('*, fleet(model)').eq('merchant_id', user.id).order('created_at', { ascending: false });
       const allBookings = bookings || [];
 
       const revenue = allBookings
@@ -83,54 +80,33 @@ export default function AdminDashboard({ onLogout }) {
 
       const pendingCount = allBookings.filter(b => b.status === 'pending').length;
 
+      // Compter les avis
+      const { count: reviewCount } = await supabase
+        .from('reviews').select('*', { count: 'exact', head: true }).eq('merchant_id', user.id);
+
       const last7Days = Array.from({ length: 7 }, (_, i) => {
-        const d = new Date(); d.setDate(d.getDate() - (6 - i));
-        return d;
+        const d = new Date(); d.setDate(d.getDate() - (6 - i)); return d;
       });
       const chart = last7Days.map(day => {
         const dayStr = day.toISOString().split('T')[0];
-        const dayRevenue = allBookings
-          .filter(b => b.start_date === dayStr && b.total_price)
-          .reduce((sum, b) => sum + b.total_price, 0);
-        return {
-          name: day.toLocaleDateString('fr-FR', { weekday: 'short' }),
-          total: dayRevenue
-        };
+        const dayRevenue = allBookings.filter(b => b.start_date === dayStr && b.total_price).reduce((sum, b) => sum + b.total_price, 0);
+        return { name: day.toLocaleDateString('fr-FR', { weekday: 'short' }), total: dayRevenue };
       });
       setChartData(chart);
 
       const actions = [];
       const todayStr = today.toISOString().split('T')[0];
-      allBookings
-        .filter(b => b.start_date === todayStr && b.status === 'confirmed')
-        .slice(0, 2)
-        .forEach(b => actions.push({
-          task: `Préparer ${b.fleet?.model || 'véhicule'}`,
-          time: 'Aujourd\'hui', type: 'departure', icon: Car, view: 'fleet'
-        }));
-      if (pendingCount > 0) actions.push({
-        task: `${pendingCount} réservation${pendingCount > 1 ? 's' : ''} en attente`,
-        time: 'À confirmer', type: 'admin', icon: ShieldCheck, view: 'bookings'
-      });
-      allBookings
-        .filter(b => b.end_date === todayStr && b.status === 'in_progress')
-        .slice(0, 1)
-        .forEach(b => actions.push({
-          task: `Retour ${b.fleet?.model || 'véhicule'}`,
-          time: 'Aujourd\'hui', type: 'return', icon: Clock, view: 'planning'
-        }));
+      allBookings.filter(b => b.start_date === todayStr && b.status === 'confirmed').slice(0, 2)
+        .forEach(b => actions.push({ task: `Préparer ${b.fleet?.model || 'véhicule'}`, time: 'Aujourd\'hui', type: 'departure', icon: Car, view: 'fleet' }));
+      if (pendingCount > 0) actions.push({ task: `${pendingCount} réservation${pendingCount > 1 ? 's' : ''} en attente`, time: 'À confirmer', type: 'admin', icon: ShieldCheck, view: 'bookings' });
+      allBookings.filter(b => b.end_date === todayStr && b.status === 'in_progress').slice(0, 1)
+        .forEach(b => actions.push({ task: `Retour ${b.fleet?.model || 'véhicule'}`, time: 'Aujourd\'hui', type: 'return', icon: Clock, view: 'planning' }));
+      if (actions.length === 0) actions.push({ task: 'Aucune action urgente', time: 'Tout est OK ✓', type: 'ok', icon: ShieldCheck, view: 'bookings' });
 
-      if (actions.length === 0) actions.push({
-        task: 'Aucune action urgente', time: 'Tout est OK ✓', type: 'ok', icon: ShieldCheck, view: 'bookings'
-      });
-
-      setStats({ revenue, occupancy, weekDepartures, fleetCount, pendingCount });
+      setStats({ revenue, occupancy, weekDepartures, fleetCount, pendingCount, reviewCount: reviewCount || 0 });
       setUrgentActions(actions);
-    } catch (err) {
-      console.error('Erreur stats:', err);
-    } finally {
-      setIsLoadingStats(false);
-    }
+    } catch (err) { console.error('Erreur stats:', err); }
+    finally { setIsLoadingStats(false); }
   };
 
   const navItems = [
@@ -139,6 +115,7 @@ export default function AdminDashboard({ onLogout }) {
     { id: 'fleet', label: 'Ma Flotte', icon: Car },
     { id: 'bookings', label: 'Réservations', icon: CalendarCheck },
     { id: 'stats', label: 'Statistiques', icon: BarChart2 },
+    { id: 'reviews', label: 'Avis Clients', icon: Star },
     { id: 'agency', label: 'Profil Agence', icon: Building2 },
     { id: 'settings', label: 'Paramètres', icon: Settings },
   ];
@@ -170,6 +147,9 @@ export default function AdminDashboard({ onLogout }) {
             <span>{item.label}</span>
             {item.id === 'bookings' && stats.pendingCount > 0 && (
               <span className="ml-auto bg-red-500 text-white text-[8px] font-black px-2 py-0.5 rounded-full">{stats.pendingCount}</span>
+            )}
+            {item.id === 'reviews' && stats.reviewCount > 0 && (
+              <span className="ml-auto bg-amber-500 text-black text-[8px] font-black px-2 py-0.5 rounded-full">{stats.reviewCount}</span>
             )}
           </button>
         ))}
@@ -242,18 +222,10 @@ export default function AdminDashboard({ onLogout }) {
                   </header>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
-                    <KPICard title="Chiffre d'Affaires" isLoading={isLoadingStats}
-                      value={`${stats.revenue.toLocaleString('fr-FR')} €`} icon={DollarSign}
-                      onClick={() => setActiveView('bookings')} />
-                    <KPICard title="Taux d'Occupation" isLoading={isLoadingStats}
-                      value={`${stats.occupancy}%`} icon={Activity}
-                      onClick={() => setActiveView('planning')} />
-                    <KPICard title="Départs Semaine" isLoading={isLoadingStats}
-                      value={stats.weekDepartures.toString()} icon={Clock}
-                      onClick={() => setActiveView('planning')} />
-                    <KPICard title="Flotte Active" isLoading={isLoadingStats}
-                      value={`${stats.fleetCount} Véhicule${stats.fleetCount > 1 ? 's' : ''}`} icon={Car}
-                      onClick={() => setActiveView('fleet')} />
+                    <KPICard title="Chiffre d'Affaires" isLoading={isLoadingStats} value={`${stats.revenue.toLocaleString('fr-FR')} €`} icon={DollarSign} onClick={() => setActiveView('bookings')} />
+                    <KPICard title="Taux d'Occupation" isLoading={isLoadingStats} value={`${stats.occupancy}%`} icon={Activity} onClick={() => setActiveView('planning')} />
+                    <KPICard title="Départs Semaine" isLoading={isLoadingStats} value={stats.weekDepartures.toString()} icon={Clock} onClick={() => setActiveView('planning')} />
+                    <KPICard title="Avis Clients" isLoading={isLoadingStats} value={stats.reviewCount.toString()} icon={Star} onClick={() => setActiveView('reviews')} />
                   </div>
 
                   <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
@@ -273,7 +245,7 @@ export default function AdminDashboard({ onLogout }) {
                         {urgentActions.map((item, i) => (
                           <motion.button key={i} whileHover={{ x: 4 }} onClick={() => setActiveView(item.view)}
                             className="w-full flex items-center gap-4 p-5 bg-white/5 rounded-2xl border border-white/5 hover:border-[#D4AF37]/30 transition-all group text-left">
-                            <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${item.type === 'payment' ? 'bg-red-500/10 text-red-500' : item.type === 'ok' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-[#D4AF37]/10 text-[#D4AF37]'}`}>
+                            <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${item.type === 'ok' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-[#D4AF37]/10 text-[#D4AF37]'}`}>
                               <item.icon size={18} />
                             </div>
                             <div className="flex-1 min-w-0">
@@ -293,6 +265,7 @@ export default function AdminDashboard({ onLogout }) {
               {activeView === 'planning' && <PlanningView key="planning" />}
               {activeView === 'bookings' && <ReservationsView key="bookings" />}
               {activeView === 'stats' && <StatsView key="stats" />}
+              {activeView === 'reviews' && <ReviewsView key="reviews" />}
               {activeView === 'agency' && <AgencyProfileView key="agency" />}
               {activeView === 'settings' && <SettingsView key="settings" />}
             </AnimatePresence>
