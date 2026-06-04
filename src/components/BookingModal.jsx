@@ -177,7 +177,17 @@ export default function BookingModal({ vehicle, storeSettings, merchantId, onClo
     }
   };
 
-  const handleSkipDeposit = () => { setIsSuccess(true); setTimeout(onClose, 3000); };
+  // ── Fix : met à jour deposit_status dans Supabase avant de fermer ──
+  const handleSkipDeposit = async () => {
+    if (bookingId) {
+      await supabase
+        .from('bookings')
+        .update({ deposit_status: 'skipped' })
+        .eq('id', bookingId);
+    }
+    setIsSuccess(true);
+    setTimeout(onClose, 3000);
+  };
 
   return (
     <div className="fixed inset-0 z-[300] flex items-center justify-center p-4 md:p-8">
@@ -375,4 +385,3 @@ export default function BookingModal({ vehicle, storeSettings, merchantId, onClo
     </div>
   );
 }
-

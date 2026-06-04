@@ -44,7 +44,7 @@ const sendConfirmationEmail = async (res, agencyName) => {
   try {
     const startDate = res.start_date ? new Date(res.start_date).toLocaleDateString('fr-FR') : '—';
     const endDate = res.end_date ? new Date(res.end_date).toLocaleDateString('fr-FR') : '—';
-    await fetch('https://nhdancdcsarrgfmfebop.supabase.co/functions/v1/send-contract-email', {
+    const response = await fetch('https://nhdancdcsarrgfmfebop.supabase.co/functions/v1/send-contract-email', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -62,8 +62,14 @@ const sendConfirmationEmail = async (res, agencyName) => {
         isConfirmation: true,
       }),
     });
+    const data = await response.json();
+    if (!response.ok || data.error) {
+      console.error('❌ Email confirmation échoué:', data);
+    } else {
+      console.log('✅ Email confirmation envoyé à', res.client_email);
+    }
   } catch (err) {
-    console.error('Email confirmation error:', err);
+    console.error('❌ Email confirmation error:', err);
   }
 };
 
@@ -358,4 +364,3 @@ export default function ReservationsView() {
     </motion.div>
   );
 }
-
